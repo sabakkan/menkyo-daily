@@ -307,10 +307,17 @@ function findRec(c){for(let i=hist.length-1;i>=0;i--){const r=hist[i];if(r.d===c
 function ymd(ds){return ds.replace(/-/g,"/")}
 function scoreLine(x){return x.s+"/"+x.n+"　"+(x.s>=PASS?"合格":"不合格")+"　"+Math.floor(x.sec/60)+"分"+(x.sec%60)+"秒"
   +(x.bl?"　未回答"+x.bl:"")+(x.tu?"　時間切れ":"")}
+function blanksOf(r){const o=[];(r.a||[]).forEach(function(x,i){if(x===null)o.push(i)});return o}
+function wrongOf(r){const b=blanksOf(r);return r.w.filter(function(i){return b.indexOf(i)<0})}
 function nums(l){return l.length?l.map(function(i){return i+1}).join(", "):"なし"}
 /* 苦手の記録：問題ごとに {m:まちがえた回数, c:苦手モードで続けて正解した回数} */
 let weak=load("weak");
 if(!weak){weak={};(load("hist")||[]).forEach(function(r){(r.w||[]).forEach(function(i){const qi=SETS[r.set][i];if(!weak[qi])weak[qi]={m:0,c:0};weak[qi].m++})});save("weak",weak)}
+if(Object.prototype.toString.call(weak)==="[object Array]"||!load("wv2")){
+  weak={};(load("hist")||[]).forEach(function(r){
+    (r.w||[]).forEach(function(i){if(r.a&&r.a[i]===null)return;const qi=SETS[r.set][i];if(!weak[qi])weak[qi]={m:0,c:0};weak[qi].m++});
+    ((r.rd&&r.rd.miss)||[]).forEach(function(i){const qi=SETS[r.set][i];if(!weak[qi])weak[qi]={m:0,c:0};weak[qi].m++});
+  });save("weak",weak);save("wv2",1)}
 function missed(qi){if(!weak[qi])weak[qi]={m:0,c:0};weak[qi].m++;weak[qi].c=0}
 function weakCount(){return Object.keys(weak).length}
 function head(r){return "【"+ymd(r.d)+" 第"+(r.set+1)+"回"+(r.h?" 補習":"")+"】"}
@@ -428,23 +435,28 @@ function finish(timeUp,silent){
   });
   const prev=recsOf(cur), first=prev[0];
   const r={d:cur.d,set:cur.set,h:cur.h,k:prev.length+1,s:score,n:n,sec:sec,bl:blank,tu:timeUp?1:0,w:w,a:cur.a,sent:0,rd:null};
-  const weak=order.filter(function(c){return cats[c].o<cats[c].n&&cats[c].o/cats[c].n<0.7})
+  const weakCats=order.filter(function(c){return cats[c].o<cats[c].n&&cats[c].o/cats[c].n<0.7})
     .sort(function(x,y){return (cats[y].n-cats[y].o)-(cats[x].n-cats[x].o)||cats[x].o/cats[x].n-cats[y].o/cats[y].n}).slice(0,3)
     .map(function(c){return c+" "+cats[c].o+"/"+cats[c].n});
   let body;
+  const myW=wrongOf(r), myB=blanksOf(r);
   if(!first){
-    body=head(r)+userName+"　"+scoreLine(r)+"\n間違い："+nums(w);
+    body=head(r)+userName+"　"+scoreLine(r)+"\n間違い："+nums(myW)+(myB.length?"\n未回答："+nums(myB):"");
   }else{
-    /* 2回目以降：1回目と最後の回を並べ、1回目の間違いが最後の回で直ったかを○×で付ける */
-    const fixed=first.w.map(function(i){return (i+1)+(w.indexOf(i)<0?"○":"×")});
-    const fresh=w.filter(function(i){return first.w.indexOf(i)<0});
+    /* 2回目以降：1回目と最後の回を並べ、1回目の間違い・未回答が最後の回で直ったかを○×で付ける */
+    const mark=function(i){return (i+1)+(w.indexOf(i)<0?"○":"×")};
+    const fW=wrongOf(first).map(mark), fB=blanksOf(first).map(mark);
+    const fresh=myW.filter(function(i){return first.w.indexOf(i)<0});
     body=head(r)+userName+"\n1回目："+scoreLine(first)+"\n最後（"+r.k+"回目）："+scoreLine(r)
-      +"\n1回目の間違い："+(fixed.length?fixed.join(" ")+"\n（○＝最後の回で正解　×＝まだ間違い）":"なし")
-      +"\n最後の回で新しく間違えた問題："+nums(fresh);
+      +"\n1回目の間違い："+(fW.length?fW.join(" "):"なし")
+      +(fB.length?"\n1回目の未回答："+fB.join(" "):"")
+      +(fW.length||fB.length?"\n（○＝最後の回で正解　×＝まだ正解していない）":"")
+      +"\n最後の回で新しく間違えた問題："+nums(fresh)
+      +(myB.length?"\n最後の回の未回答："+nums(myB):"");
   }
-  if(weak.length) body+="\n弱い分野："+weak.join("、");
+  if(weakCats.length) body+="\n弱い分野："+weakCats.join("、");
   r.msg=withCode(body);
-  w.forEach(function(i){missed(ids[i])}); save("weak",weak);
+  w.forEach(function(i){if(cur.a[i]!==null)missed(ids[i])}); save("weak",weak);
   hist.push(r); if(hist.length>90) hist=hist.slice(-90);
   save("hist",hist); cur=null; del("cur");
   if(!silent) showDone(r);
@@ -548,7 +560,8 @@ function finishRedo(){
     const first=recsOf(r)[0]||r, multi=first!==r;
     let body=head(r)+userName+"　やり直し完了\n1回目："+scoreLine(first);
     if(multi) body+="\n最後（"+(r.k||1)+"回目）："+scoreLine(r);
-    body+="\n"+(multi?"最後の回の間違い：":"間違い：")+nums(r.w)
+    const rb=blanksOf(r);
+    body+="\n"+(multi?"最後の回の間違い：":"間違い：")+nums(wrongOf(r))+(rb.length?"\n"+(multi?"最後の回の未回答：":"未回答：")+nums(rb):"")
       +"\nやり直し："+r.w.length+"問を"+rd.rounds+"周で全問正解"
       +"\nやり直しでまた間違えた問題："+nums((rd.miss||[]).slice().sort(function(x,y){return x-y}));
     rd.done=1; rd.msg=withCode(body); save("hist",hist);
@@ -635,16 +648,17 @@ $("aGo").onclick=function(){
     const d=(m[1]||String(new Date().getFullYear()))+"/"+pad2(m[2])+"/"+pad2(m[3]);
     const lines=rest.split("\n"), name=lines[0].split("　")[0].replace(/^\s+|\s+$/g,"");
     const key_=d+"|"+set+"|"+(m[5]?1:0)+"|"+name;
-    let o=recs[key_]; if(!o){o=recs[key_]={d:d,set:set,h:m[5]?1:0,name:name,first:null,fw:null,last:null,k:1,ok:true};keys.push(key_)}
+    let o=recs[key_]; if(!o){o=recs[key_]={d:d,set:set,h:m[5]?1:0,name:name,first:null,fw:null,fb:[],last:null,k:1,ok:true};keys.push(key_)}
     cnt++; if(!okc){o.ok=false;bad++}
     const l1=rest.match(/1回目：([^\n]*)/), l2=rest.match(/最後（(\d+)回目）：([^\n]*)/);
     if(l1&&l2){
-      const fw=rest.match(/1回目の間違い：([^\n]*)/);
+      const fw=rest.match(/1回目の間違い：([^\n]*)/), fb=rest.match(/1回目の未回答：([^\n]*)/);
+      if(fb) o.fb=parseNums(fb[1]);
       o.first=parseScore(l1[1])||o.first; if(fw) o.fw=parseNums(fw[1]);
       if(+l2[1]>=o.k){o.k=+l2[1];o.last=parseScore(l2[2])}
     }else{
-      const sc=parseScore(lines[0]), w=rest.match(/間違い：([^\n]*)/);
-      if(sc){o.first=sc; if(w) o.fw=parseNums(w[1]); if(!o.last) o.last=sc}
+      const sc=parseScore(lines[0]), w=rest.match(/\n間違い：([^\n]*)/), bl=rest.match(/\n未回答：([^\n]*)/);
+      if(sc){o.first=sc; if(w) o.fw=parseNums(w[1]); o.fb=bl?parseNums(bl[1]):[]; if(!o.last) o.last=sc}
     }
   }
   if(!keys.length){$("aOut").innerHTML='<div class="result bad"><p>結果の文章が見つかりません。</p></div>';return}
@@ -656,6 +670,7 @@ $("aGo").onclick=function(){
       o.last?o.last.s+"/"+o.last.n:"",String(o.k),o.ok?"OK":"NG"]);
     if(!o.fw) return;
     SETS[o.set].forEach(function(qi,i){
+      if(o.fb.indexOf(i+1)>=0) return;
       const c=Q[qi][1], wrong=o.fw.indexOf(i+1)>=0;
       if(!qm[qi])qm[qi]={n:0,w:0,at:"第"+(o.set+1)+"回-"+(i+1)}; qm[qi].n++; if(wrong)qm[qi].w++;
       if(!cat[c])cat[c]={n:0,w:0}; cat[c].n++; if(wrong)cat[c].w++;
@@ -670,7 +685,7 @@ $("aGo").onclick=function(){
   window._agg=[tsv(t1),tsv(t2),tsv(t3)];
   function blk(i,title,rows,qcol){return '<div class="card"><div class="label">'+title+"</div>"+table(rows,qcol)+'<button class="btn sub" data-c="'+i+'">表をコピー</button></div>'}
   $("aOut").innerHTML='<div class="result '+(bad?"bad":"good")+'"><p>読み取った文章：'+cnt+"件"+(bad?"　確認記号が合わない文章："+bad+"件":"")+"</p></div>"
-    +blk(0,"人ごと・日ごとの点数",t1,-1)+blk(1,"まちがいの多い問題（1回目の結果）",t2,4)+blk(2,"分野ごとの正答率（1回目の結果）",t3,-1);
+    +blk(0,"人ごと・日ごとの点数",t1,-1)+blk(1,"まちがいの多い問題（1回目・答えた人だけ）",t2,4)+blk(2,"分野ごとの正答率（1回目・答えた分だけ）",t3,-1);
 };
 $("aOut").onclick=function(e){const b=e.target.closest("button[data-c]");if(b)copyText(window._agg[+b.dataset.c],b)};
 
